@@ -1,0 +1,34 @@
+.ssh:
+  image: kroniak/ssh-client:3.19
+  variables:
+    SSH_HOST: "REDACTED"
+    SSH_USER: "ubuntu"
+    SSH_ADDRESS: $SSH_USER@$SSH_HOST
+  before_script:
+    - mkdir -p ~/.ssh && chmod 700 ~/.ssh
+    - echo -e "Host *\n\tStrictHostKeyChecking no\n\n" > ~/.ssh/config && chmod 600 ~/.ssh/config
+    - echo "$SSH_PRIVATE_KEY_BASE64" | base64 -d > ~/.ssh/id_rsa && chmod 400 ~/.ssh/id_rsa
+    - ssh-agent sh -c "ssh-add ~/.ssh/id_rsa"
+    - ssh-keyscan -H "$SSH_HOST"
+
+
+.docker_compose:
+  extends: .ssh
+  stage: deploy
+  variables:
+    IMAGE_NAME: $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA
+    PRUNE_COMMAND: "docker system prune -f -a"
+    DEPLOY_PATH: "/home/ubuntu/backend"
+  script:
+    - AUTH_COMMAND="echo $CI_REGISTRY_PASSWORD | docker login $CI_REGISTRY --username $CI_REGISTRY_USER --password-stdin"
+    - ssh $SSH_ADDRESS "$AUTH_COMMAND"
+    - ssh $SSH_ADDRESS "docker pull $IMAGE_NAME"
+    # Очистка и подготовка директории
+    - ssh $SSH_ADDRESS "rm -rf $DEPLOY_PATH"
+    - ssh $SSH_ADDRESS "mkdir -p $DEPLOY_PATH"
+    # Клонирование в чистую папку
+    - ssh $SSH_ADDRESS "git clone --branch $CI_COMMIT_REF_NAME $CI_REPOSITORY_URL $DEPLOY_PATH"
+    # Запуск контейнеров
+    - ssh $SSH_ADDRESS "cd $DEPLOY_PATH && CI_REGISTRY_IMAGE=$CI_REGISTRY_IMAGE CI_COMMIT_SHA=$CI_COMMIT_SHA docker compose down"
+    - ssh $SSH_ADDRESS "cd $DEPLOY_PATH && CI_REGISTRY_IMAGE=$CI_REGISTRY_IMAGE CI_COMMIT_SHA=$CI_COMMIT_SHA docker compose up -d"
+    - ssh $SSH_ADDRESS "$PRUNE_COMMAND"
